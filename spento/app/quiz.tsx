@@ -86,7 +86,7 @@ export default function QuizScreen() {
     if (user) {
       await saveUser({ ...user, country, currency, language, quizDone: true });
     }
-    router.replace('/(tabs)/explore' as never);
+    router.replace('/splash' as never);
   };
 
   const pickerLabels: Record<PickerKey, string> = {

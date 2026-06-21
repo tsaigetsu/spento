@@ -30,6 +30,7 @@ export default function RootLayout() {
         <Stack.Screen name="register" />
         <Stack.Screen name="quiz" />
         <Stack.Screen name="(tabs)" options={{ gestureEnabled: false, animation: 'fade' }} />
+        <Stack.Screen name="splash" options={{ gestureEnabled: false, animation: 'fade' }} />
         <Stack.Screen name="profile" />
       </Stack>
       <StatusBar style="auto" />

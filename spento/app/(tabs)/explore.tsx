@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   StatusBar,
   Animated,
-  Appearance,
   TextInput,
   Alert,
   Modal,
@@ -33,6 +32,7 @@ import {
   loadUser,
   generateId,
 } from '@/lib/data';
+import { useTheme } from '@/lib/theme-context';
 
 if (Platform.OS === 'android') {
   UIManager.setLayoutAnimationEnabledExperimental?.(true);
@@ -866,9 +866,10 @@ const SAMPLE_EXPENSES: Expense[] = (() => {
 // --- Main App Component ---
 
 export default function App(): React.JSX.Element {
+  const { isDark: isDarkTheme, setDark } = useTheme();
+
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [isDarkTheme, setIsDarkTheme] = useState(false);
-  const animValue = useRef(new Animated.Value(0)).current;
+  const animValue = useRef(new Animated.Value(isDarkTheme ? 1 : 0)).current;
   const [isEditMode, setIsEditMode] = useState(false);
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -890,17 +891,11 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     const init = async () => {
       try {
-        const [savedTheme, savedExpenses, savedUser] = await Promise.all([
-          AsyncStorage.getItem(THEME_KEY),
+        const [savedExpenses, savedUser] = await Promise.all([
           loadExpenses(),
           loadUser(),
         ]);
         setUser(savedUser);
-        if (savedTheme !== null) {
-          setIsDarkTheme(savedTheme === 'dark');
-        } else {
-          setIsDarkTheme(Appearance.getColorScheme() === 'dark');
-        }
         setExpenses(savedExpenses.length > 0 ? savedExpenses : SAMPLE_EXPENSES);
       } catch {
         setExpenses(SAMPLE_EXPENSES);
@@ -917,7 +912,6 @@ export default function App(): React.JSX.Element {
   }, [expenses, loaded]);
 
   useEffect(() => {
-    AsyncStorage.setItem(THEME_KEY, isDarkTheme ? 'dark' : 'light');
     Animated.timing(animValue, {
       toValue: isDarkTheme ? 1 : 0,
       duration: TRANSITION_DURATION,
@@ -932,7 +926,9 @@ export default function App(): React.JSX.Element {
 
   const toggleTheme = () => {
     animateHeaderBtn(themeBtnScale);
-    setIsDarkTheme(prev => !prev);
+    const next = !isDarkTheme;
+    setDark(next);
+    AsyncStorage.setItem(THEME_KEY, next ? 'dark' : 'light');
   };
 
   const openMenu = () => {
@@ -980,7 +976,7 @@ export default function App(): React.JSX.Element {
   ), [isEditMode, isDarkTheme, expandedItemId, handleSaveExpense, handleDeleteExpense, textColor, expenseTextColor]);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: isDarkTheme ? '#161616' : '#F5F5F5' }}>
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: isDarkTheme ? '#161616' : '#F5F5F5' }}>
       <StatusBar barStyle={isDarkTheme ? 'light-content' : 'dark-content'} />
       <Animated.View style={{ flex: 1, backgroundColor }}>
 
@@ -1061,7 +1057,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    minHeight: 80,
     elevation: 3,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },

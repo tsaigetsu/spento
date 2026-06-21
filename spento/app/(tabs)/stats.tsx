@@ -8,16 +8,15 @@ import {
   StatusBar,
   Animated,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { CATEGORIES, CATEGORY_LIST, type Expense, type Category, loadExpenses } from '@/lib/data';
+import { useTheme } from '@/lib/theme-context';
 
 // --- Constants ---
 
 const PRIMARY_COLOR = '#9644D8';
-const THEME_KEY = 'SPENTO_THEME';
 
 const MONTHS_FULL = [
   'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -353,11 +352,11 @@ const MonthArrow: React.FC<MonthArrowProps> = ({ onPress, name, color, disabled 
 // --- Main Stats Screen ---
 
 export default function StatsScreen(): React.JSX.Element {
+  const { isDark: isDarkTheme } = useTheme();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [isDarkTheme, setIsDarkTheme] = useState(false);
   const [chartMode, setChartMode] = useState<ChartMode>('bar');
   const [visibleMode, setVisibleMode] = useState<ChartMode>('bar');
   const chartFadeAnim = useRef(new Animated.Value(1)).current;
@@ -365,12 +364,7 @@ export default function StatsScreen(): React.JSX.Element {
   const pieBtnScale = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    const load = async () => {
-      const [data, theme] = await Promise.all([loadExpenses(), AsyncStorage.getItem(THEME_KEY)]);
-      setExpenses(data);
-      setIsDarkTheme(theme === 'dark');
-    };
-    load();
+    loadExpenses().then(data => setExpenses(data));
   }, []);
 
   const switchChart = (mode: ChartMode) => {
@@ -411,7 +405,7 @@ export default function StatsScreen(): React.JSX.Element {
   const subColor = isDarkTheme ? '#8E8E93' : '#6C6C70';
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: bg }}>
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: bg }}>
       <StatusBar barStyle={isDarkTheme ? 'light-content' : 'dark-content'} />
 
       <View style={[sS.header, { backgroundColor: isDarkTheme ? '#222' : '#FFF' }]}>
@@ -512,7 +506,7 @@ export default function StatsScreen(): React.JSX.Element {
 const sS = StyleSheet.create({
   header: {
     paddingHorizontal: 16,
-    minHeight: 74,
+    minHeight: 80,
     justifyContent: 'center',
     elevation: 2,
     shadowColor: '#000',

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useRef } from 'react';
 import {
   View,
   Text,
@@ -8,12 +8,11 @@ import {
   Animated,
   TouchableOpacity,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTheme } from '@/lib/theme-context';
 
 const PRIMARY_COLOR = '#9644D8';
-const THEME_KEY = 'SPENTO_THEME';
 
 // --- Hardcoded leaderboard data ---
 
@@ -219,11 +218,7 @@ const lcS = StyleSheet.create({
 // --- TopScreen ---
 
 export default function TopScreen(): React.JSX.Element {
-  const [isDarkTheme, setIsDarkTheme] = useState(false);
-
-  useEffect(() => {
-    AsyncStorage.getItem(THEME_KEY).then(t => setIsDarkTheme(t === 'dark'));
-  }, []);
+  const { isDark: isDarkTheme } = useTheme();
 
   const bg = isDarkTheme ? '#161616' : '#F5F5F5';
   const cardBg = isDarkTheme ? '#222' : '#FFF';
@@ -231,7 +226,7 @@ export default function TopScreen(): React.JSX.Element {
   const subColor = isDarkTheme ? '#8E8E93' : '#6C6C70';
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: bg }}>
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: bg }}>
       <StatusBar barStyle={isDarkTheme ? 'light-content' : 'dark-content'} />
 
       <View style={[tS.header, { backgroundColor: isDarkTheme ? '#222' : '#FFF' }]}>
@@ -264,7 +259,7 @@ export default function TopScreen(): React.JSX.Element {
 const tS = StyleSheet.create({
   header: {
     paddingHorizontal: 16,
-    minHeight: 74,
+    minHeight: 80,
     justifyContent: 'center',
     elevation: 2,
     shadowColor: '#000',

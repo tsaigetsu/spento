@@ -45,7 +45,7 @@ export default function LoginScreen() {
       if (email.trim().toLowerCase() === 'admin@spento.app' && password === 'admin') {
         const adminUser: AuthUser = { ...ADMIN_USER, loginTimestamp: Date.now() };
         await saveUser(adminUser);
-        router.replace('/(tabs)/explore' as never);
+        router.replace('/splash' as never);
         return;
       }
 
@@ -61,7 +61,7 @@ export default function LoginScreen() {
       if (email.trim() === 'admin' && password === 'admin') {
         const adminUser: AuthUser = { ...ADMIN_USER, loginTimestamp: Date.now() };
         await saveUser(adminUser);
-        router.replace('/(tabs)/explore' as never);
+        router.replace('/splash' as never);
         return;
       }
 
