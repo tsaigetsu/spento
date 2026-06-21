@@ -31,6 +31,7 @@ import {
   saveExpenses,
   loadUser,
   generateId,
+  SAMPLE_EXPENSES,
 } from '@/lib/data';
 import { useTheme } from '@/lib/theme-context';
 
@@ -674,9 +675,7 @@ ExpenseItemView.displayName = 'ExpenseItemView';
 interface ExpenseItemEditProps {
   item: Expense;
   isDarkTheme: boolean;
-  textColor: Animated.AnimatedInterpolation<string | number>;
   handleSave: (updatedExpense: Expense) => void;
-  handleDelete: (id: string) => void;
   onClose: () => void;
 }
 
@@ -684,7 +683,7 @@ const ExpenseItemEdit: React.FC<ExpenseItemEditProps> = React.memo(({
   item,
   isDarkTheme,
   handleSave,
-  handleDelete,
+  onClose,
 }) => {
   const [name, setName] = useState(item.name);
   const [price, setPrice] = useState(String(item.price));
@@ -706,17 +705,6 @@ const ExpenseItemEdit: React.FC<ExpenseItemEditProps> = React.memo(({
       quantity: Math.max(1, parseInt(quantity, 10) || 1),
       category,
     });
-  };
-
-  const handleDeleteConfirmed = () => {
-    Alert.alert(
-      'Удаление',
-      `Вы уверены, что хотите удалить "${item.name}"?`,
-      [
-        { text: 'Отмена', style: 'cancel' },
-        { text: 'Удалить', style: 'destructive', onPress: () => handleDelete(item.id) },
-      ]
-    );
   };
 
   const inputBg = isDarkTheme ? '#3A3A3C' : '#F2F2F7';
@@ -759,10 +747,10 @@ const ExpenseItemEdit: React.FC<ExpenseItemEditProps> = React.memo(({
       <CategoryPicker value={category} onChange={setCategory} />
       <View style={styles.inlineButtonRow}>
         <TouchableOpacity
-          style={[styles.deleteButton, { backgroundColor: DANGER_COLOR }]}
-          onPress={handleDeleteConfirmed}
+          style={[styles.cancelButton, { borderColor: isDarkTheme ? '#3A3A3C' : '#E0E0E0' }]}
+          onPress={onClose}
         >
-          <Ionicons name="trash-outline" size={20} color="#FFF" />
+          <Text style={[styles.cancelButtonText, { color: isDarkTheme ? '#8E8E93' : '#6C6C70' }]}>Отмена</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.saveButton, { backgroundColor: PRIMARY_COLOR, opacity: isDirty ? 1 : 0.4 }]}
@@ -782,7 +770,6 @@ ExpenseItemEdit.displayName = 'ExpenseItemEdit';
 interface ExpenseItemProps {
   item: Expense;
   isDarkTheme: boolean;
-  isAppInEditMode: boolean;
   textColor: Animated.AnimatedInterpolation<string | number>;
   expenseTextColor: Animated.AnimatedInterpolation<string | number>;
   handleSave: (updatedExpense: Expense) => void;
@@ -793,14 +780,20 @@ interface ExpenseItemProps {
 
 const ExpenseItem: React.FC<ExpenseItemProps> = React.memo((props) => {
   const {
-    item, isDarkTheme, isAppInEditMode,
+    item, isDarkTheme,
     textColor, expenseTextColor,
     handleSave, handleDelete,
     expandedItemId, setExpandedItemId,
   } = props;
 
   const isExpanded = expandedItemId === item.id;
+  const [isEditing, setIsEditing] = useState(false);
   const chevronAnim = useRef(new Animated.Value(isExpanded ? 1 : 0)).current;
+
+  // Reset edit state when item collapses
+  useEffect(() => {
+    if (!isExpanded) setIsEditing(false);
+  }, [isExpanded]);
 
   useEffect(() => {
     Animated.spring(chevronAnim, {
@@ -814,7 +807,6 @@ const ExpenseItem: React.FC<ExpenseItemProps> = React.memo((props) => {
   const chevronRotate = chevronAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] });
 
   const handleToggleExpand = useCallback(() => {
-    if (!isAppInEditMode) return;
     LayoutAnimation.configureNext({
       duration: 260,
       create: { type: 'easeInEaseOut', property: 'opacity' },
@@ -822,9 +814,20 @@ const ExpenseItem: React.FC<ExpenseItemProps> = React.memo((props) => {
       delete: { type: 'easeInEaseOut', property: 'opacity' },
     });
     setExpandedItemId(isExpanded ? null : item.id);
-  }, [isAppInEditMode, isExpanded, item.id, setExpandedItemId]);
+  }, [isExpanded, item.id, setExpandedItemId]);
 
-  const iconColor = isAppInEditMode ? PRIMARY_COLOR : (isDarkTheme ? '#3A3A3C' : '#FFF');
+  const handleDeleteConfirmed = useCallback(() => {
+    Alert.alert(
+      'Удаление',
+      `Удалить "${item.name}"?`,
+      [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Удалить', style: 'destructive', onPress: () => handleDelete(item.id) },
+      ]
+    );
+  }, [item.id, item.name, handleDelete]);
+
+  const iconColor = isExpanded ? PRIMARY_COLOR : (isDarkTheme ? '#6E6E73' : '#C7C7CC');
 
   return (
     <View style={[styles.expenseItem, { backgroundColor: isDarkTheme ? '#2C2C2E' : '#FFF' }]}>
@@ -836,14 +839,34 @@ const ExpenseItem: React.FC<ExpenseItemProps> = React.memo((props) => {
           </Animated.View>
         </TouchableOpacity>
       </View>
-      {isExpanded && isAppInEditMode && (
+
+      {/* Expanded — view mode: Удалить + Изменить */}
+      {isExpanded && !isEditing && (
+        <View style={[styles.expandedActions, { borderTopColor: isDarkTheme ? '#3A3A3C' : '#F0F0F0' }]}>
+          <TouchableOpacity
+            style={[styles.actionBtnOutline, { borderColor: DANGER_COLOR }]}
+            onPress={handleDeleteConfirmed}
+          >
+            <Ionicons name="trash-outline" size={16} color={DANGER_COLOR} />
+            <Text style={[styles.actionBtnOutlineText, { color: DANGER_COLOR }]}>Удалить</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.actionBtnFill, { backgroundColor: PRIMARY_COLOR }]}
+            onPress={() => setIsEditing(true)}
+          >
+            <Ionicons name="pencil-outline" size={16} color="#FFF" />
+            <Text style={styles.actionBtnFillText}>Изменить</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Expanded — edit mode: form */}
+      {isExpanded && isEditing && (
         <ExpenseItemEdit
           item={item}
           isDarkTheme={isDarkTheme}
-          textColor={textColor}
           handleSave={handleSave}
-          handleDelete={handleDelete}
-          onClose={handleToggleExpand}
+          onClose={() => setIsEditing(false)}
         />
       )}
     </View>
@@ -851,26 +874,20 @@ const ExpenseItem: React.FC<ExpenseItemProps> = React.memo((props) => {
 });
 ExpenseItem.displayName = 'ExpenseItem';
 
-// --- Sample data for first launch ---
-
-const SAMPLE_EXPENSES: Expense[] = (() => {
-  const now = new Date().toISOString();
-  return [
-    { id: generateId(), productId: 'p_cheese', name: 'Сыр', price: 5.50, quantity: 1, category: 'Useful', date: now },
-    { id: generateId(), productId: 'p_brownie', name: 'Мюллер брауни', price: 3.95, quantity: 2, category: 'Sweets', date: now },
-    { id: generateId(), productId: 'p_cigs', name: 'Сигареты', price: 10.00, quantity: 1, category: 'Harmful', date: now },
-    { id: generateId(), productId: 'p_mcdonalds', name: 'Макдональдс', price: 15.00, quantity: 1, category: 'Needs', date: now },
-  ];
-})();
-
 // --- Main App Component ---
 
-export default function App(): React.JSX.Element {
+interface AppProps {
+  onExpensesChange?: (e: Expense[]) => void;
+  openMenuRef?: { current: (() => void) | null };
+}
+
+export default function App({ onExpensesChange, openMenuRef }: AppProps = {}): React.JSX.Element {
   const { isDark: isDarkTheme, setDark } = useTheme();
+  const onExpensesChangeRef = useRef(onExpensesChange);
+  useEffect(() => { onExpensesChangeRef.current = onExpensesChange; });
 
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const animValue = useRef(new Animated.Value(isDarkTheme ? 1 : 0)).current;
-  const [isEditMode, setIsEditMode] = useState(false);
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
@@ -909,6 +926,7 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!loaded) return;
     saveExpenses(expenses);
+    onExpensesChangeRef.current?.(expenses);
   }, [expenses, loaded]);
 
   useEffect(() => {
@@ -931,10 +949,14 @@ export default function App(): React.JSX.Element {
     AsyncStorage.setItem(THEME_KEY, next ? 'dark' : 'light');
   };
 
-  const openMenu = () => {
+  const openMenu = useCallback(() => {
     animateHeaderBtn(menuBtnScale);
     setMenuVisible(true);
-  };
+  }, [menuBtnScale]);
+
+  useEffect(() => {
+    if (openMenuRef) openMenuRef.current = openMenu;
+  }, [openMenu, openMenuRef]);
 
   const handleSaveExpense = useCallback((updatedExpense: Expense) => {
     setExpenses(prev => prev.map(e => e.id === updatedExpense.id ? updatedExpense : e));
@@ -954,18 +976,10 @@ export default function App(): React.JSX.Element {
     Alert.alert('Скоро', 'Сканирование чеков будет доступно с ИИ-интеграцией.');
   };
 
-  const handleEditModeToggle = useCallback(() => {
-    setIsEditMode(prev => {
-      if (prev) setExpandedItemId(null);
-      return !prev;
-    });
-  }, []);
-
   const renderExpense = useCallback(({ item }: { item: Expense }) => (
     <ExpenseItem
       item={item}
       isDarkTheme={isDarkTheme}
-      isAppInEditMode={isEditMode}
       textColor={textColor}
       expenseTextColor={expenseTextColor}
       handleSave={handleSaveExpense}
@@ -973,7 +987,7 @@ export default function App(): React.JSX.Element {
       expandedItemId={expandedItemId}
       setExpandedItemId={setExpandedItemId}
     />
-  ), [isEditMode, isDarkTheme, expandedItemId, handleSaveExpense, handleDeleteExpense, textColor, expenseTextColor]);
+  ), [isDarkTheme, expandedItemId, handleSaveExpense, handleDeleteExpense, textColor, expenseTextColor]);
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: isDarkTheme ? '#161616' : '#F5F5F5' }}>
@@ -1009,16 +1023,12 @@ export default function App(): React.JSX.Element {
             keyExtractor={item => item.id}
             renderItem={renderExpense}
             style={styles.list}
+            contentContainerStyle={{ paddingBottom: 90 }}
             keyboardDismissMode="interactive"
           />
         )}
 
         <View style={styles.buttonRow}>
-          <CircleButton
-            iconName={isEditMode ? 'close' : 'pencil'}
-            onPress={handleEditModeToggle}
-            color={isEditMode ? DANGER_COLOR : PRIMARY_COLOR}
-          />
           <PrimaryButton
             iconName="camera"
             onPress={handleAddCamera}
@@ -1057,7 +1067,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    minHeight: 80,
+    minHeight: 60,
     elevation: 3,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
@@ -1093,9 +1103,35 @@ const styles = StyleSheet.create({
   expenseName: { fontSize: 16, fontWeight: '500' },
   expenseDetails: { fontSize: 14, marginTop: 2 },
   toggleButton: { padding: 8 },
+  expandedActions: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  actionBtnOutline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  actionBtnOutlineText: { fontSize: 14, fontWeight: '600' },
+  actionBtnFill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 9,
+    borderRadius: 8,
+  },
+  actionBtnFillText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
   inlineEditContainer: {
     paddingBottom: 4,
-    borderTopWidth: 1,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: 'rgba(128,128,128,0.2)',
     paddingTop: 8,
   },
@@ -1115,21 +1151,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  cancelButton: {
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    marginRight: 8,
+  },
+  cancelButtonText: { fontWeight: '600', fontSize: 14 },
   saveButton: {
     paddingHorizontal: 15,
     paddingVertical: 10,
     borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 15,
   },
   saveButtonText: { color: '#FFF', fontWeight: 'bold', fontSize: 14 },
   buttonRow: {
+    position: 'absolute',
+    bottom: 16,
+    left: 16,
+    right: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    marginBottom: 16,
   },
   circleButton: {
     width: 50,

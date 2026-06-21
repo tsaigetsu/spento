@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,8 +11,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
-import { CATEGORIES, CATEGORY_LIST, type Expense, type Category, loadExpenses } from '@/lib/data';
+import { CATEGORIES, CATEGORY_LIST, type Expense, type Category } from '@/lib/data';
 import { useTheme } from '@/lib/theme-context';
+import { useExpenses } from '@/lib/expenses-context';
 
 // --- Constants ---
 
@@ -353,19 +354,15 @@ const MonthArrow: React.FC<MonthArrowProps> = ({ onPress, name, color, disabled 
 
 export default function StatsScreen(): React.JSX.Element {
   const { isDark: isDarkTheme } = useTheme();
+  const expenses = useExpenses();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
-  const [expenses, setExpenses] = useState<Expense[]>([]);
   const [chartMode, setChartMode] = useState<ChartMode>('bar');
   const [visibleMode, setVisibleMode] = useState<ChartMode>('bar');
   const chartFadeAnim = useRef(new Animated.Value(1)).current;
   const barBtnScale = useRef(new Animated.Value(1)).current;
   const pieBtnScale = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    loadExpenses().then(data => setExpenses(data));
-  }, []);
 
   const switchChart = (mode: ChartMode) => {
     if (mode === chartMode) return;
@@ -506,7 +503,7 @@ export default function StatsScreen(): React.JSX.Element {
 const sS = StyleSheet.create({
   header: {
     paddingHorizontal: 16,
-    minHeight: 80,
+    minHeight: 60,
     justifyContent: 'center',
     elevation: 2,
     shadowColor: '#000',

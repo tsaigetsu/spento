@@ -8,6 +8,7 @@ import {
   Animated,
   Dimensions,
   Appearance,
+  PanResponder,
 } from 'react-native';
 import PagerView from 'react-native-pager-view';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +17,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 
 import { ThemeCtx } from '@/lib/theme-context';
+import { ExpensesCtx } from '@/lib/expenses-context';
+import { type Expense, loadExpenses, SAMPLE_EXPENSES } from '@/lib/data';
 import ExploreScreen from './explore';
 import StatsScreen from './stats';
 import TopScreen from './top';
@@ -34,21 +37,38 @@ const N = TABS.length;
 
 export default function TabLayout() {
   const [activeTab, setActiveTab] = useState(0);
-  const [visitedTabs, setVisitedTabs] = useState<Set<number>>(new Set([0]));
   const [isDark, setIsDark] = useState(false);
-  const [themeReady, setThemeReady] = useState(false);
+  const [sharedExpenses, setSharedExpenses] = useState<Expense[]>([]);
+  const [ready, setReady] = useState(false);
   const pagerRef = useRef<PagerView>(null);
   const insets = useSafeAreaInsets();
+  const openMenuRef = useRef<(() => void) | null>(null) as { current: (() => void) | null };
+  const activeTabRef = useRef(0);
+
+  const leftEdgePan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderRelease: (_, { dx, dy }) => {
+        if (activeTabRef.current === 0 && dx > 40 && Math.abs(dx) > Math.abs(dy)) {
+          openMenuRef.current?.();
+        }
+      },
+    })
+  ).current;
 
   const tabBarWidth = useRef(Dimensions.get('window').width);
   const tabW = tabBarWidth.current / N;
   const indicatorX = useRef(new Animated.Value(tabW / 2 - INDICATOR_W / 2)).current;
 
-  // Load theme from AsyncStorage BEFORE rendering screens
+  // Load theme + expenses before rendering screens (eliminates flash and empty stats)
   useEffect(() => {
-    AsyncStorage.getItem(THEME_KEY).then(stored => {
+    Promise.all([
+      AsyncStorage.getItem(THEME_KEY),
+      loadExpenses(),
+    ]).then(([stored, savedExpenses]) => {
       setIsDark(stored === 'dark' || (!stored && Appearance.getColorScheme() === 'dark'));
-      setThemeReady(true);
+      setSharedExpenses(savedExpenses.length > 0 ? savedExpenses : SAMPLE_EXPENSES);
+      setReady(true);
     });
 
     const sub = Appearance.addChangeListener(({ colorScheme }) => {
@@ -61,11 +81,9 @@ export default function TabLayout() {
 
   const setDark = useCallback((v: boolean) => setIsDark(v), []);
 
-  // --- Navigation ---
   const goTo = useCallback((index: number) => {
     pagerRef.current?.setPage(index);
     setActiveTab(index);
-    setVisitedTabs(prev => new Set([...prev, index]));
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
@@ -78,74 +96,81 @@ export default function TabLayout() {
 
   const handlePageSelected = useCallback((index: number) => {
     setActiveTab(index);
-    setVisitedTabs(prev => new Set([...prev, index]));
+    activeTabRef.current = index;
   }, []);
 
   const tabBarBg     = isDark ? '#1C1C1E' : '#FFF';
   const tabBarBorder = isDark ? '#2C2C2E' : '#E0E0E0';
   const inactiveColor = isDark ? '#6E6E73' : '#8E8E93';
 
-  // Don't render until theme is loaded — screens start with the correct isDark value
-  if (!themeReady) return null;
+  if (!ready) return null;
 
   return (
     <ThemeCtx.Provider value={{ isDark, setDark }}>
-      <View style={s.root}>
-        <PagerView
-          ref={pagerRef}
-          style={s.pager}
-          initialPage={0}
-          onPageScroll={e => handlePageScroll(e.nativeEvent.position, e.nativeEvent.offset)}
-          onPageSelected={e => handlePageSelected(e.nativeEvent.position)}
-          overScrollMode="never"
-        >
-          <View key="0" collapsable={false} style={s.page}>
-            <ExploreScreen />
-          </View>
-          <View key="1" collapsable={false} style={s.page}>
-            {visitedTabs.has(1) && <StatsScreen />}
-          </View>
-          <View key="2" collapsable={false} style={s.page}>
-            {visitedTabs.has(2) && <TopScreen />}
-          </View>
-        </PagerView>
+      <ExpensesCtx.Provider value={sharedExpenses}>
+        <View style={s.root}>
+          <PagerView
+            ref={pagerRef}
+            style={s.pager}
+            initialPage={0}
+            onPageScroll={e => handlePageScroll(e.nativeEvent.position, e.nativeEvent.offset)}
+            onPageSelected={e => handlePageSelected(e.nativeEvent.position)}
+            overScrollMode="never"
+          >
+            {/* All three rendered immediately so they're loaded by the time user swipes */}
+            <View key="0" collapsable={false} style={s.page}>
+              <ExploreScreen onExpensesChange={setSharedExpenses} openMenuRef={openMenuRef} />
+            </View>
+            <View key="1" collapsable={false} style={s.page}>
+              <StatsScreen />
+            </View>
+            <View key="2" collapsable={false} style={s.page}>
+              <TopScreen />
+            </View>
+          </PagerView>
 
-        {/* Custom bottom tab bar */}
-        <View
-          style={[s.tabBar, { paddingBottom: insets.bottom || 8, backgroundColor: tabBarBg, borderTopColor: tabBarBorder }]}
-          onLayout={e => {
-            tabBarWidth.current = e.nativeEvent.layout.width;
-            const tw = tabBarWidth.current / N;
-            indicatorX.setValue(activeTab * tw + tw / 2 - INDICATOR_W / 2);
-          }}
-        >
-          <Animated.View
-            style={[s.indicator, { transform: [{ translateX: indicatorX }] }]}
-            pointerEvents="none"
+          {/* Left-edge transparent overlay — intercepts right-swipes to open burger menu on tab 0 */}
+          <View
+            style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 15, zIndex: 50 }}
+            {...leftEdgePan.panHandlers}
           />
 
-          {TABS.map((tab, i) => {
-            const isActive = activeTab === i;
-            return (
-              <TouchableOpacity
-                key={tab.key}
-                style={s.tabItem}
-                onPress={() => goTo(i)}
-                activeOpacity={0.7}
-              >
-                <Ionicons
-                  name={isActive ? tab.iconActive : tab.icon}
-                  size={24}
-                  color={isActive ? PRIMARY : inactiveColor}
-                />
-                <Text style={[s.tabLabel, { color: isActive ? PRIMARY : inactiveColor }, isActive && s.tabLabelActive]}>
-                  {tab.title}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+          {/* Custom bottom tab bar */}
+          <View
+            style={[s.tabBar, { paddingBottom: insets.bottom || 8, backgroundColor: tabBarBg, borderTopColor: tabBarBorder }]}
+            onLayout={e => {
+              tabBarWidth.current = e.nativeEvent.layout.width;
+              const tw = tabBarWidth.current / N;
+              indicatorX.setValue(activeTab * tw + tw / 2 - INDICATOR_W / 2);
+            }}
+          >
+            <Animated.View
+              style={[s.indicator, { transform: [{ translateX: indicatorX }] }]}
+              pointerEvents="none"
+            />
+            {TABS.map((tab, i) => {
+              const isActive = activeTab === i;
+              return (
+                <TouchableOpacity
+                  key={tab.key}
+                  style={s.tabItem}
+                  onPress={() => goTo(i)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={isActive ? tab.iconActive : tab.icon}
+                    size={24}
+                    color={isActive ? PRIMARY : inactiveColor}
+                  />
+                  <Text style={[s.tabLabel, { color: isActive ? PRIMARY : inactiveColor }, isActive && s.tabLabelActive]}>
+                    {tab.title}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
-      </View>
+      </ExpensesCtx.Provider>
     </ThemeCtx.Provider>
   );
 }
@@ -179,11 +204,6 @@ const s = StyleSheet.create({
     gap: 3,
     paddingBottom: 4,
   },
-  tabLabel: {
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  tabLabelActive: {
-    fontWeight: '600',
-  },
+  tabLabel: { fontSize: 11, fontWeight: '500' },
+  tabLabelActive: { fontWeight: '600' },
 });

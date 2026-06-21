@@ -259,7 +259,7 @@ export default function TopScreen(): React.JSX.Element {
 const tS = StyleSheet.create({
   header: {
     paddingHorizontal: 16,
-    minHeight: 80,
+    minHeight: 60,
     justifyContent: 'center',
     elevation: 2,
     shadowColor: '#000',

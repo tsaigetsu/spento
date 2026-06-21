@@ -178,3 +178,14 @@ export async function saveExpenses(expenses: Expense[]): Promise<void> {
 export function generateId(): string {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
+
+/** Default expenses shown on first launch before the user adds anything. */
+export const SAMPLE_EXPENSES: Expense[] = (() => {
+  const now = new Date().toISOString();
+  return [
+    { id: generateId(), productId: 'p_cheese',    name: 'Сыр',             price: 5.50,  quantity: 1, category: 'Useful',  date: now },
+    { id: generateId(), productId: 'p_brownie',   name: 'Мюллер брауни',   price: 3.95,  quantity: 2, category: 'Sweets',  date: now },
+    { id: generateId(), productId: 'p_cigs',      name: 'Сигареты',        price: 10.00, quantity: 1, category: 'Harmful', date: now },
+    { id: generateId(), productId: 'p_mcdonalds', name: 'Макдональдс',     price: 15.00, quantity: 1, category: 'Needs',   date: now },
+  ];
+})()
