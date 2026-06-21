@@ -1,15 +1,18 @@
-// tsconfig.json
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": false,
-    // Настройки для алиасов
-    "baseUrl": ".", // Важно, чтобы базовый путь был корнем проекта
+    "baseUrl": ".",
     "paths": {
-      // Это говорит, что @/ ведет в корень проекта
       "@/*": [
         "./*"
       ]
     }
-  }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ]
 }
