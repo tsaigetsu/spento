@@ -155,23 +155,24 @@ app.post('/api/ocr', upload.single('image'), async (req, res) => {
       Readable.from(req.file.buffer).pipe(uploadStream);
     });
 
-    // 2. Verify the URL actually returns an image before passing to Tesseract
-    const headResp = await fetch(imageUrl, { method: 'HEAD' });
-    const contentType = headResp.headers.get('content-type') ?? 'unknown';
-    if (headResp.ok) {
-      console.log(`[URL check] ${headResp.status} OK — content-type: ${contentType}`);
-    } else {
-      console.error(`[URL check] ${headResp.status} — content-type: ${contentType}`);
-      throw new Error(`Cloudinary URL returned ${headResp.status} — not an image`);
+    // 2. Download image from Cloudinary into a buffer
+    console.log('[fetch] downloading image from Cloudinary…');
+    const imgResp = await fetch(imageUrl);
+    const contentType = imgResp.headers.get('content-type') ?? 'unknown';
+    console.log(`[fetch] ${imgResp.status} — content-type: ${contentType}`);
+    if (!imgResp.ok) {
+      throw new Error(`Failed to download image: ${imgResp.status} (${contentType})`);
     }
+    const imgBuffer = Buffer.from(await imgResp.arrayBuffer());
+    console.log('[fetch] buffer size:', imgBuffer.length, 'bytes');
 
-    // 3. Run Tesseract OCR on the Cloudinary URL
+    // 3. Run Tesseract OCR on the buffer (no network calls inside Tesseract)
     console.log('[Tesseract] starting recognition…');
     worker = await createWorker(['pol', 'eng'], 1, {
       cachePath: '/tmp/tessdata',
       logger: () => {},
     });
-    const { data: { text } } = await worker.recognize(imageUrl);
+    const { data: { text } } = await worker.recognize(imgBuffer);
     console.log('[Tesseract] done, text length:', text.length);
 
     // 3. Parse receipt text into items
