@@ -406,7 +406,10 @@ export default function StatsScreen(): React.JSX.Element {
       <StatusBar barStyle={isDarkTheme ? 'light-content' : 'dark-content'} />
 
       <View style={[sS.header, { backgroundColor: isDarkTheme ? '#222' : '#FFF' }]}>
-        <Text style={[sS.title, { color: textColor }]}>Статистика</Text>
+        <Text style={[sS.title, { color: textColor }]}>Spento</Text>
+        <View style={sS.freeBadge}>
+          <Text style={sS.freeBadgeText}>FREE</Text>
+        </View>
       </View>
 
       <ScrollView style={sS.scroll} contentContainerStyle={sS.content} showsVerticalScrollIndicator={false}>
@@ -502,9 +505,12 @@ export default function StatsScreen(): React.JSX.Element {
 
 const sS = StyleSheet.create({
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     paddingHorizontal: 16,
     minHeight: 60,
-    justifyContent: 'center',
     elevation: 2,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
@@ -512,6 +518,8 @@ const sS = StyleSheet.create({
     shadowRadius: 2,
   },
   title: { fontSize: 20, fontWeight: 'bold' },
+  freeBadge: { backgroundColor: '#4CAF50', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
+  freeBadgeText: { color: '#FFF', fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
   scroll: { flex: 1 },
   content: { padding: 16, paddingBottom: 40 },
   monthRow: {

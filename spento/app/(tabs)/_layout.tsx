@@ -36,15 +36,22 @@ const TABS = [
 const N = TABS.length;
 
 export default function TabLayout() {
-  const [activeTab, setActiveTab] = useState(0);
-  const [isDark, setIsDark] = useState(false);
+  const [activeTab, setActiveTab]           = useState(0);
+  const [isDark, setIsDark]                 = useState(false);
   const [sharedExpenses, setSharedExpenses] = useState<Expense[]>([]);
-  const [ready, setReady] = useState(false);
-  const pagerRef = useRef<PagerView>(null);
-  const insets = useSafeAreaInsets();
-  const openMenuRef = useRef<(() => void) | null>(null) as { current: (() => void) | null };
-  const activeTabRef = useRef(0);
+  const [ready, setReady]                   = useState(false);
+  const [tabBarHeight, setTabBarHeight]     = useState(56);
 
+  const pagerRef    = useRef<PagerView>(null);
+  const insets      = useSafeAreaInsets();
+  const activeTabRef = useRef(0);
+  const openMenuRef  = useRef<(() => void) | null>(null) as { current: (() => void) | null };
+
+  const tabBarWidth = useRef(Dimensions.get('window').width);
+  const tabW        = tabBarWidth.current / N;
+  const indicatorX  = useRef(new Animated.Value(tabW / 2 - INDICATOR_W / 2)).current;
+
+  // Swipe right from left edge → open burger menu (only on tab 0, below header area)
   const leftEdgePan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -56,11 +63,7 @@ export default function TabLayout() {
     })
   ).current;
 
-  const tabBarWidth = useRef(Dimensions.get('window').width);
-  const tabW = tabBarWidth.current / N;
-  const indicatorX = useRef(new Animated.Value(tabW / 2 - INDICATOR_W / 2)).current;
-
-  // Load theme + expenses before rendering screens (eliminates flash and empty stats)
+  // ── Load theme + expenses ────────────────────────────────────────────────────
   useEffect(() => {
     Promise.all([
       AsyncStorage.getItem(THEME_KEY),
@@ -84,9 +87,8 @@ export default function TabLayout() {
   const goTo = useCallback((index: number) => {
     pagerRef.current?.setPage(index);
     setActiveTab(index);
-    if (Platform.OS !== 'web') {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    }
+    activeTabRef.current = index;
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   }, []);
 
   const handlePageScroll = useCallback((position: number, offset: number) => {
@@ -99,25 +101,28 @@ export default function TabLayout() {
     activeTabRef.current = index;
   }, []);
 
-  const tabBarBg     = isDark ? '#1C1C1E' : '#FFF';
-  const tabBarBorder = isDark ? '#2C2C2E' : '#E0E0E0';
+  const tabBarBg      = isDark ? '#1C1C1E' : '#FFF';
+  const tabBarBorder  = isDark ? '#2C2C2E' : '#E0E0E0';
   const inactiveColor = isDark ? '#6E6E73' : '#8E8E93';
 
   if (!ready) return null;
+
+  const overlayBottom = tabBarHeight + (insets.bottom || 0);
 
   return (
     <ThemeCtx.Provider value={{ isDark, setDark }}>
       <ExpensesCtx.Provider value={sharedExpenses}>
         <View style={s.root}>
+
           <PagerView
             ref={pagerRef}
             style={s.pager}
             initialPage={0}
+            scrollEnabled={true}
             onPageScroll={e => handlePageScroll(e.nativeEvent.position, e.nativeEvent.offset)}
             onPageSelected={e => handlePageSelected(e.nativeEvent.position)}
             overScrollMode="never"
           >
-            {/* All three rendered immediately so they're loaded by the time user swipes */}
             <View key="0" collapsable={false} style={s.page}>
               <ExploreScreen onExpensesChange={setSharedExpenses} openMenuRef={openMenuRef} />
             </View>
@@ -129,17 +134,11 @@ export default function TabLayout() {
             </View>
           </PagerView>
 
-          {/* Left-edge transparent overlay — intercepts right-swipes to open burger menu on tab 0 */}
-          <View
-            style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 15, zIndex: 50 }}
-            {...leftEdgePan.panHandlers}
-          />
-
-          {/* Custom bottom tab bar */}
           <View
             style={[s.tabBar, { paddingBottom: insets.bottom || 8, backgroundColor: tabBarBg, borderTopColor: tabBarBorder }]}
             onLayout={e => {
               tabBarWidth.current = e.nativeEvent.layout.width;
+              setTabBarHeight(e.nativeEvent.layout.height);
               const tw = tabBarWidth.current / N;
               indicatorX.setValue(activeTab * tw + tw / 2 - INDICATOR_W / 2);
             }}
@@ -169,6 +168,20 @@ export default function TabLayout() {
               );
             })}
           </View>
+
+          {/* Left-edge overlay: swipe right below header → burger menu */}
+          <View
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: insets.top + 60,
+              bottom: overlayBottom,
+              width: 44,
+              zIndex: 10,
+            }}
+            {...leftEdgePan.panHandlers}
+          />
+
         </View>
       </ExpensesCtx.Provider>
     </ThemeCtx.Provider>
@@ -176,9 +189,9 @@ export default function TabLayout() {
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1 },
+  root:  { flex: 1 },
   pager: { flex: 1 },
-  page: { flex: 1 },
+  page:  { flex: 1 },
   tabBar: {
     flexDirection: 'row',
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -204,6 +217,6 @@ const s = StyleSheet.create({
     gap: 3,
     paddingBottom: 4,
   },
-  tabLabel: { fontSize: 11, fontWeight: '500' },
+  tabLabel:       { fontSize: 11, fontWeight: '500' },
   tabLabelActive: { fontWeight: '600' },
 });

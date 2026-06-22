@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,11 +16,14 @@ import {
   LayoutAnimation,
   UIManager,
   Image,
+  ActionSheetIOS,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { OcrOverlay } from '@/components/OcrOverlay';
 import {
   CATEGORIES,
   CATEGORY_LIST,
@@ -46,6 +49,10 @@ const DANGER_COLOR = '#FF3B30';
 const TRANSITION_DURATION = 150;
 const THEME_KEY = 'SPENTO_THEME';
 const DRAWER_WIDTH = 280;
+
+const DAYS_RU        = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+const MONTHS_SHORT   = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+const MONTHS_FULL_RU = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 
 // --- Shared press-scale animation hook ---
 
@@ -765,7 +772,197 @@ const ExpenseItemEdit: React.FC<ExpenseItemEditProps> = React.memo(({
 });
 ExpenseItemEdit.displayName = 'ExpenseItemEdit';
 
-// --- ExpenseItem (with animated chevron + LayoutAnimation) ---
+// --- Day-grouping utilities ---
+
+type ListRow =
+  | { type: 'dayHeader'; key: string; label: string; dayTotal: number }
+  | { type: 'expense';   key: string; expense: Expense };
+
+function formatDayLabel(dayStr: string): string {
+  const now = new Date();
+  const todayStr  = now.toISOString().slice(0, 10);
+  const yestStr   = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+  if (dayStr === todayStr) return 'Сегодня';
+  if (dayStr === yestStr)  return 'Вчера';
+  const d = new Date(dayStr + 'T12:00:00'); // noon to avoid tz shift
+  const dow = DAYS_RU[d.getDay()];
+  const mon = MONTHS_SHORT[d.getMonth()];
+  return d.getFullYear() === now.getFullYear()
+    ? `${dow}, ${d.getDate()} ${mon}`
+    : `${dow}, ${d.getDate()} ${mon} ${d.getFullYear()}`;
+}
+
+function groupByDay(expenses: Expense[]): ListRow[] {
+  const sorted = [...expenses].sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+  );
+  const rows: ListRow[] = [];
+  let lastDay = '';
+  for (const expense of sorted) {
+    const day = expense.date.slice(0, 10);
+    if (day !== lastDay) {
+      const dayExpenses = sorted.filter(e => e.date.slice(0, 10) === day);
+      const dayTotal = dayExpenses.reduce((s, e) => s + e.price * e.quantity, 0);
+      rows.push({ type: 'dayHeader', key: `hdr_${day}`, label: formatDayLabel(day), dayTotal });
+      lastDay = day;
+    }
+    rows.push({ type: 'expense', key: expense.id, expense });
+  }
+  return rows;
+}
+
+// --- DayHeader ---
+
+interface DayHeaderProps { label: string; dayTotal: number; isDarkTheme: boolean; }
+const DayHeader: React.FC<DayHeaderProps> = ({ label, dayTotal, isDarkTheme }) => (
+  <View style={styles.dayHeader}>
+    <Text style={[styles.dayHeaderLabel, { color: isDarkTheme ? '#8E8E93' : '#6C6C70' }]}>
+      {label}
+    </Text>
+    <Text style={[styles.dayHeaderTotal, { color: isDarkTheme ? '#636366' : '#9E9EA0' }]}>
+      {dayTotal.toFixed(2)} zł
+    </Text>
+  </View>
+);
+
+// --- ArchiveModal ---
+
+interface ArchiveModalProps {
+  visible: boolean;
+  onClose: () => void;
+  expenses: Expense[];
+  isDarkTheme: boolean;
+}
+
+const ArchiveModal: React.FC<ArchiveModalProps> = ({ visible, onClose, expenses, isDarkTheme }) => {
+  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+
+  const bg      = isDarkTheme ? '#161616' : '#F5F5F5';
+  const cardBg  = isDarkTheme ? '#2C2C2E' : '#FFF';
+  const textClr = isDarkTheme ? '#FFF'    : '#1C1C1E';
+  const subClr  = isDarkTheme ? '#8E8E93' : '#6C6C70';
+
+  const months = useMemo(() => {
+    const map = new Map<string, { label: string; total: number; count: number; items: Expense[] }>();
+    for (const e of expenses) {
+      const key = e.date.slice(0, 7);
+      const d   = new Date(e.date + 'T12:00:00');
+      if (!map.has(key)) {
+        map.set(key, { label: `${MONTHS_FULL_RU[d.getMonth()]} ${d.getFullYear()}`, total: 0, count: 0, items: [] });
+      }
+      const m = map.get(key)!;
+      m.total += e.price * e.quantity;
+      m.count += 1;
+      m.items.push(e);
+    }
+    return [...map.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([key, val]) => ({ key, ...val }));
+  }, [expenses]);
+
+  const currentMonthKey = new Date().toISOString().slice(0, 7);
+  const archiveMonths   = months.filter(m => m.key < currentMonthKey);
+
+  const selectedData = selectedMonth ? months.find(m => m.key === selectedMonth) : null;
+  const archiveRows  = useMemo(
+    () => selectedData ? groupByDay(selectedData.items) : [],
+    [selectedData]
+  );
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: bg }}>
+        {/* Archive header */}
+        <View style={[archS.header, { backgroundColor: cardBg }]}>
+          <TouchableOpacity
+            onPress={selectedMonth ? () => setSelectedMonth(null) : onClose}
+            style={{ padding: 8 }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name={selectedMonth ? 'chevron-back' : 'close'} size={24} color={PRIMARY_COLOR} />
+          </TouchableOpacity>
+          <Text style={[archS.title, { color: textClr }]}>
+            {selectedData ? selectedData.label : 'Архив'}
+          </Text>
+          <View style={{ width: 40 }} />
+        </View>
+
+        {!selectedMonth ? (
+          /* Month list */
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+            {archiveMonths.length === 0 ? (
+              <Text style={[archS.empty, { color: subClr }]}>Нет архивных данных</Text>
+            ) : archiveMonths.map(m => (
+              <TouchableOpacity
+                key={m.key}
+                onPress={() => setSelectedMonth(m.key)}
+                style={[archS.monthCard, { backgroundColor: cardBg }]}
+                activeOpacity={0.7}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[archS.monthLabel, { color: textClr }]}>{m.label}</Text>
+                  <Text style={[archS.monthSub, { color: subClr }]}>{m.count} позиций</Text>
+                </View>
+                <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                  <Text style={[archS.monthTotal, { color: PRIMARY_COLOR }]}>
+                    {m.total.toFixed(2)} zł
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={subClr} />
+                </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        ) : (
+          /* Month detail grouped by day */
+          <FlatList
+            data={archiveRows}
+            keyExtractor={row => row.key}
+            renderItem={({ item }) => {
+              if (item.type === 'dayHeader') {
+                return <DayHeader label={item.label} dayTotal={item.dayTotal} isDarkTheme={isDarkTheme} />;
+              }
+              const e = item.expense;
+              const cat = CATEGORIES[e.category];
+              return (
+                <View style={[archS.expenseCard, { backgroundColor: cardBg }]}>
+                  <View style={[archS.catDot, { backgroundColor: cat.color }]} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[archS.expName, { color: textClr }]}>{e.name}</Text>
+                    <Text style={[archS.expSub, { color: subClr }]}>{cat.label} · ×{e.quantity}</Text>
+                  </View>
+                  <Text style={[archS.expPrice, { color: textClr }]}>
+                    {(e.price * e.quantity).toFixed(2)} zł
+                  </Text>
+                </View>
+              );
+            }}
+            contentContainerStyle={{ paddingBottom: 40 }}
+          />
+        )}
+      </SafeAreaView>
+    </Modal>
+  );
+};
+
+const archS = StyleSheet.create({
+  header:      { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, minHeight: 56, justifyContent: 'space-between' },
+  title:       { fontSize: 18, fontWeight: '700' },
+  empty:       { textAlign: 'center', marginTop: 60, fontSize: 16 },
+  monthCard:   { flexDirection: 'row', alignItems: 'center', borderRadius: 14, padding: 16, marginBottom: 10 },
+  monthLabel:  { fontSize: 16, fontWeight: '600', marginBottom: 2 },
+  monthSub:    { fontSize: 13 },
+  monthTotal:  { fontSize: 16, fontWeight: '700' },
+  expenseCard: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginBottom: 8, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  catDot:      { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
+  expName:     { fontSize: 15, fontWeight: '500' },
+  expSub:      { fontSize: 13, marginTop: 2 },
+  expPrice:    { fontSize: 15, fontWeight: '600' },
+});
+
+// --- ExpenseItem (double-tap to reveal actions) ---
+
+const REVEAL_WIDTH  = 140;
+const REVEAL_OFFSET = REVEAL_WIDTH + 10; // extra 10px gap between card and buttons
 
 interface ExpenseItemProps {
   item: Expense;
@@ -773,108 +970,125 @@ interface ExpenseItemProps {
   textColor: Animated.AnimatedInterpolation<string | number>;
   expenseTextColor: Animated.AnimatedInterpolation<string | number>;
   handleSave: (updatedExpense: Expense) => void;
-  handleDelete: (id: string) => void;
-  expandedItemId: string | null;
-  setExpandedItemId: (id: string | null) => void;
+  handleDelete: (item: Expense) => void; // full item for undo support
 }
 
-const ExpenseItem: React.FC<ExpenseItemProps> = React.memo((props) => {
-  const {
-    item, isDarkTheme,
-    textColor, expenseTextColor,
-    handleSave, handleDelete,
-    expandedItemId, setExpandedItemId,
-  } = props;
-
-  const isExpanded = expandedItemId === item.id;
+const ExpenseItem: React.FC<ExpenseItemProps> = React.memo(({
+  item, isDarkTheme, textColor, expenseTextColor, handleSave, handleDelete,
+}) => {
+  const swipeX   = useRef(new Animated.Value(0)).current;
+  const editAnim = useRef(new Animated.Value(0)).current;
+  const [revealed, setRevealed] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const chevronAnim = useRef(new Animated.Value(isExpanded ? 1 : 0)).current;
+  const lastTap  = useRef(0);
 
-  // Reset edit state when item collapses
-  useEffect(() => {
-    if (!isExpanded) setIsEditing(false);
-  }, [isExpanded]);
+  // ── Snap helpers ────────────────────────────────────────────────────────────
+  const snapOpen = () => {
+    setRevealed(true);
+    Animated.spring(swipeX, { toValue: -REVEAL_OFFSET, useNativeDriver: true, tension: 200, friction: 18 }).start();
+  };
 
-  useEffect(() => {
-    Animated.spring(chevronAnim, {
-      toValue: isExpanded ? 1 : 0,
-      useNativeDriver: true,
-      tension: 200,
-      friction: 12,
-    }).start();
-  }, [isExpanded, chevronAnim]);
+  const snapClose = () => {
+    setRevealed(false);
+    Animated.spring(swipeX, { toValue: 0, useNativeDriver: true, tension: 200, friction: 18 }).start();
+  };
 
-  const chevronRotate = chevronAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] });
+  // ── Tap: single tap closes if revealed; double-tap reveals ──────────────────
+  const handleTap = () => {
+    if (isEditing) return;
+    if (revealed) { snapClose(); return; }
+    const now = Date.now();
+    if (now - lastTap.current < 350) {
+      lastTap.current = 0;
+      snapOpen();
+    } else {
+      lastTap.current = now;
+    }
+  };
 
-  const handleToggleExpand = useCallback(() => {
-    LayoutAnimation.configureNext({
-      duration: 260,
-      create: { type: 'easeInEaseOut', property: 'opacity' },
-      update: { type: 'spring', springDamping: 0.75 },
-      delete: { type: 'easeInEaseOut', property: 'opacity' },
+  // ── Delete: fly off left → parent handles list collapse + undo toast ─────────
+  const handleDeletePress = () => {
+    Animated.timing(swipeX, { toValue: -600, useNativeDriver: true, duration: 240 })
+      .start(() => handleDelete(item));
+  };
+
+  // ── Edit: snap back, then spring-expand the form ────────────────────────────
+  const handleEditPress = () => {
+    setRevealed(false);
+    Animated.spring(swipeX, { toValue: 0, useNativeDriver: true, tension: 200, friction: 18 }).start(() => {
+      editAnim.setValue(0);
+      setIsEditing(true);
+      Animated.spring(editAnim, {
+        toValue: 1,
+        useNativeDriver: false,
+        tension: 90,
+        friction: 11,
+      }).start();
     });
-    setExpandedItemId(isExpanded ? null : item.id);
-  }, [isExpanded, item.id, setExpandedItemId]);
+  };
 
-  const handleDeleteConfirmed = useCallback(() => {
-    Alert.alert(
-      'Удаление',
-      `Удалить "${item.name}"?`,
-      [
-        { text: 'Отмена', style: 'cancel' },
-        { text: 'Удалить', style: 'destructive', onPress: () => handleDelete(item.id) },
-      ]
-    );
-  }, [item.id, item.name, handleDelete]);
+  const handleCloseEdit = () => {
+    Animated.timing(editAnim, {
+      toValue: 0,
+      duration: 210,
+      useNativeDriver: false,
+    }).start(() => setIsEditing(false));
+  };
 
-  const iconColor = isExpanded ? PRIMARY_COLOR : (isDarkTheme ? '#6E6E73' : '#C7C7CC');
+  const dotColor = isDarkTheme ? '#48484A' : '#C7C7CC';
 
   return (
-    <View style={[styles.expenseItem, { backgroundColor: isDarkTheme ? '#2C2C2E' : '#FFF' }]}>
-      <View style={styles.expenseHeaderRow}>
-        <ExpenseItemView item={item} textColor={textColor} expenseTextColor={expenseTextColor} />
-        <TouchableOpacity onPress={handleToggleExpand} style={styles.toggleButton}>
-          <Animated.View style={{ transform: [{ rotate: chevronRotate }] }}>
-            <Ionicons name="chevron-down" size={24} color={iconColor} />
-          </Animated.View>
+    <View style={styles.swipeContainer}>
+      {/* Action buttons revealed on tap */}
+      <View style={styles.swipeActions}>
+        <TouchableOpacity style={[styles.swipeActionBtn, { backgroundColor: '#636366' }]} onPress={handleEditPress}>
+          <Ionicons name="pencil" size={18} color="#FFF" />
+          <Text style={styles.swipeActionLabel}>Изменить</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.swipeActionBtn, { backgroundColor: DANGER_COLOR }]} onPress={handleDeletePress}>
+          <Ionicons name="trash" size={18} color="#FFF" />
+          <Text style={styles.swipeActionLabel}>Удалить</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Expanded — view mode: Удалить + Изменить */}
-      {isExpanded && !isEditing && (
-        <View style={[styles.expandedActions, { borderTopColor: isDarkTheme ? '#3A3A3C' : '#F0F0F0' }]}>
-          <TouchableOpacity
-            style={[styles.actionBtnOutline, { borderColor: DANGER_COLOR }]}
-            onPress={handleDeleteConfirmed}
-          >
-            <Ionicons name="trash-outline" size={16} color={DANGER_COLOR} />
-            <Text style={[styles.actionBtnOutlineText, { color: DANGER_COLOR }]}>Удалить</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionBtnFill, { backgroundColor: PRIMARY_COLOR }]}
-            onPress={() => setIsEditing(true)}
-          >
-            <Ionicons name="pencil-outline" size={16} color="#FFF" />
-            <Text style={styles.actionBtnFillText}>Изменить</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      {/* Sliding card */}
+      <Animated.View
+        style={[styles.swipeCard, { backgroundColor: isDarkTheme ? '#2C2C2E' : '#FFF', transform: [{ translateX: swipeX }] }]}
+      >
+        <TouchableOpacity activeOpacity={0.85} onPress={handleTap} style={styles.swipeCardContent}>
+          <ExpenseItemView item={item} textColor={textColor} expenseTextColor={expenseTextColor} />
+          {!isEditing && (
+            <Ionicons
+              name={revealed ? 'chevron-forward' : 'ellipsis-horizontal'}
+              size={15}
+              color={revealed ? PRIMARY_COLOR : dotColor}
+            />
+          )}
+        </TouchableOpacity>
 
-      {/* Expanded — edit mode: form */}
-      {isExpanded && isEditing && (
-        <ExpenseItemEdit
-          item={item}
-          isDarkTheme={isDarkTheme}
-          handleSave={handleSave}
-          onClose={() => setIsEditing(false)}
-        />
-      )}
+        {isEditing && (
+          <Animated.View style={{
+            maxHeight: editAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 600] }),
+            opacity: editAnim.interpolate({ inputRange: [0, 0.4], outputRange: [0, 1], extrapolate: 'clamp' }),
+            overflow: 'hidden',
+          }}>
+            <ExpenseItemEdit
+              item={item}
+              isDarkTheme={isDarkTheme}
+              handleSave={(updated) => { handleSave(updated); handleCloseEdit(); }}
+              onClose={handleCloseEdit}
+            />
+          </Animated.View>
+        )}
+      </Animated.View>
     </View>
   );
 });
 ExpenseItem.displayName = 'ExpenseItem';
 
 // --- Main App Component ---
+
+interface PendingDelete { item: Expense; idx: number; }
 
 interface AppProps {
   onExpensesChange?: (e: Expense[]) => void;
@@ -888,11 +1102,20 @@ export default function App({ onExpensesChange, openMenuRef }: AppProps = {}): R
 
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const animValue = useRef(new Animated.Value(isDarkTheme ? 1 : 0)).current;
-  const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loaded, setLoaded] = useState(false);
+
+  // Undo toast
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [undoCountdown, setUndoCountdown] = useState(5);
+  const toastSlide    = useRef(new Animated.Value(100)).current;
+  const toastProgress = useRef(new Animated.Value(1)).current;
+  const undoTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const expensesRef   = useRef<Expense[]>([]);
+  useEffect(() => { expensesRef.current = expenses; }, [expenses]);
+  useEffect(() => () => { if (undoTimerRef.current) clearInterval(undoTimerRef.current); }, []);
 
   // Animated header button scales
   const menuBtnScale = useRef(new Animated.Value(1)).current;
@@ -960,34 +1183,144 @@ export default function App({ onExpensesChange, openMenuRef }: AppProps = {}): R
 
   const handleSaveExpense = useCallback((updatedExpense: Expense) => {
     setExpenses(prev => prev.map(e => e.id === updatedExpense.id ? updatedExpense : e));
-    setExpandedItemId(null);
   }, []);
 
-  const handleDeleteExpense = useCallback((id: string) => {
-    setExpenses(prev => prev.filter(e => e.id !== id));
-    setExpandedItemId(null);
-  }, []);
+  const handleDeleteExpense = useCallback((expense: Expense) => {
+    const idx = expensesRef.current.findIndex(e => e.id === expense.id);
+    LayoutAnimation.configureNext({
+      duration: 380,
+      update: { type: 'spring', springDamping: 0.62 },
+      delete: { type: 'easeInEaseOut', property: 'opacity', duration: 180 },
+    });
+    setExpenses(prev => prev.filter(e => e.id !== expense.id));
+    setPendingDelete({ item: expense, idx });
+
+    toastSlide.setValue(100);
+    toastProgress.setValue(1);
+    Animated.spring(toastSlide, { toValue: 0, useNativeDriver: true, tension: 150, friction: 12 }).start();
+    Animated.timing(toastProgress, { toValue: 0, useNativeDriver: false, duration: 5000 }).start();
+
+    setUndoCountdown(5);
+    if (undoTimerRef.current) clearInterval(undoTimerRef.current);
+    undoTimerRef.current = setInterval(() => {
+      setUndoCountdown(c => {
+        if (c <= 1) {
+          clearInterval(undoTimerRef.current!);
+          undoTimerRef.current = null;
+          Animated.timing(toastSlide, { toValue: 100, useNativeDriver: true, duration: 220 })
+            .start(() => setPendingDelete(null));
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+  }, [toastSlide, toastProgress]);
+
+  const handleUndoDelete = useCallback(() => {
+    if (!pendingDelete) return;
+    if (undoTimerRef.current) { clearInterval(undoTimerRef.current); undoTimerRef.current = null; }
+    toastProgress.stopAnimation();
+    Animated.timing(toastSlide, { toValue: 100, useNativeDriver: true, duration: 200 })
+      .start(() => { setPendingDelete(null); setUndoCountdown(5); });
+    LayoutAnimation.configureNext({
+      duration: 300,
+      create: { type: 'easeInEaseOut', property: 'opacity' },
+      update: { type: 'spring', springDamping: 0.72 },
+    });
+    setExpenses(prev => {
+      const arr = [...prev];
+      arr.splice(Math.min(pendingDelete.idx, arr.length), 0, pendingDelete.item);
+      return arr;
+    });
+  }, [pendingDelete, toastSlide, toastProgress]);
 
   const handleAddExpense = useCallback((newData: Omit<Expense, 'id'>) => {
     setExpenses(prev => [{ ...newData, id: generateId() }, ...prev]);
   }, []);
 
-  const handleAddCamera = () => {
-    Alert.alert('Скоро', 'Сканирование чеков будет доступно с ИИ-интеграцией.');
-  };
+  const [ocrVisible,   setOcrVisible]   = useState(false);
+  const [ocrImageUri,  setOcrImageUri]  = useState<string | null>(null);
 
-  const renderExpense = useCallback(({ item }: { item: Expense }) => (
-    <ExpenseItem
-      item={item}
-      isDarkTheme={isDarkTheme}
-      textColor={textColor}
-      expenseTextColor={expenseTextColor}
-      handleSave={handleSaveExpense}
-      handleDelete={handleDeleteExpense}
-      expandedItemId={expandedItemId}
-      setExpandedItemId={setExpandedItemId}
-    />
-  ), [isDarkTheme, expandedItemId, handleSaveExpense, handleDeleteExpense, textColor, expenseTextColor]);
+  const launchCamera = useCallback(async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Нет доступа', 'Разрешите доступ к камере в настройках.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      quality: 0.7,
+    });
+    if (!result.canceled && result.assets[0]?.uri) {
+      setOcrImageUri(result.assets[0].uri);
+      setOcrVisible(true);
+    }
+  }, []);
+
+  const launchGallery = useCallback(async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Нет доступа', 'Разрешите доступ к галерее в настройках.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.7,
+      allowsMultipleSelection: false,
+    });
+    if (!result.canceled && result.assets[0]?.uri) {
+      setOcrImageUri(result.assets[0].uri);
+      setOcrVisible(true);
+    }
+  }, []);
+
+  const handleAddCamera = useCallback(() => {
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options: ['Отмена', 'Камера', 'Галерея'], cancelButtonIndex: 0 },
+        btn => { if (btn === 1) launchCamera(); if (btn === 2) launchGallery(); },
+      );
+    } else {
+      Alert.alert('Добавить расход', 'Выберите источник', [
+        { text: 'Камера',  onPress: launchCamera },
+        { text: 'Галерея', onPress: launchGallery },
+        { text: 'Отмена', style: 'cancel' },
+      ]);
+    }
+  }, [launchCamera, launchGallery]);
+
+  const handleOcrConfirm = useCallback((newItems: Omit<Expense, 'id'>[], _receiptId?: string) => {
+    setOcrVisible(false);
+    LayoutAnimation.configureNext({
+      duration: 320,
+      create: { type: 'easeInEaseOut', property: 'opacity' },
+      update: { type: 'spring', springDamping: 0.70 },
+    });
+    setExpenses(prev => [
+      ...newItems.map(it => ({ ...it, id: generateId() })),
+      ...prev,
+    ]);
+  }, []);
+
+  const [archiveVisible, setArchiveVisible] = useState(false);
+
+  const groupedExpenses = useMemo(() => groupByDay(expenses), [expenses]);
+
+  const renderRow = useCallback(({ item }: { item: ListRow }) => {
+    if (item.type === 'dayHeader') {
+      return <DayHeader label={item.label} dayTotal={item.dayTotal} isDarkTheme={isDarkTheme} />;
+    }
+    return (
+      <ExpenseItem
+        item={item.expense}
+        isDarkTheme={isDarkTheme}
+        textColor={textColor}
+        expenseTextColor={expenseTextColor}
+        handleSave={handleSaveExpense}
+        handleDelete={handleDeleteExpense}
+      />
+    );
+  }, [isDarkTheme, handleSaveExpense, handleDeleteExpense, textColor, expenseTextColor]);
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: isDarkTheme ? '#161616' : '#F5F5F5' }}>
@@ -995,15 +1328,20 @@ export default function App({ onExpensesChange, openMenuRef }: AppProps = {}): R
       <Animated.View style={{ flex: 1, backgroundColor }}>
 
         <Animated.View style={[styles.header, { backgroundColor: headerColor }]}>
-          <TouchableOpacity onPress={openMenu} activeOpacity={1}>
+          <TouchableOpacity onPress={openMenu} activeOpacity={1} style={{ padding: 8 }}>
             <Animated.View style={{ transform: [{ scale: menuBtnScale }] }}>
               <Ionicons name="menu" size={28} color={isDarkTheme ? '#FFF' : '#000'} />
             </Animated.View>
           </TouchableOpacity>
 
-          <Animated.Text style={[styles.title, { color: textColor as any }]}>Spento</Animated.Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Animated.Text style={[styles.title, { color: textColor as any }]}>Spento</Animated.Text>
+            <View style={styles.freeBadge}>
+              <Text style={styles.freeBadgeText}>FREE</Text>
+            </View>
+          </View>
 
-          <TouchableOpacity onPress={toggleTheme} activeOpacity={1}>
+          <TouchableOpacity onPress={toggleTheme} activeOpacity={1} style={{ padding: 8 }}>
             <Animated.View style={{ transform: [{ scale: themeBtnScale }] }}>
               <Ionicons name={isDarkTheme ? 'sunny' : 'moon'} size={28} color={PRIMARY_COLOR} />
             </Animated.View>
@@ -1019,12 +1357,24 @@ export default function App({ onExpensesChange, openMenuRef }: AppProps = {}): R
           </View>
         ) : (
           <FlatList
-            data={expenses}
-            keyExtractor={item => item.id}
-            renderItem={renderExpense}
+            data={groupedExpenses}
+            keyExtractor={row => row.key}
+            renderItem={renderRow}
             style={styles.list}
-            contentContainerStyle={{ paddingBottom: 90 }}
+            contentContainerStyle={{ paddingBottom: 100 }}
             keyboardDismissMode="interactive"
+            ListFooterComponent={
+              <TouchableOpacity
+                style={[styles.archiveFooterBtn, { borderColor: isDarkTheme ? '#3A3A3C' : '#D1D1D6' }]}
+                onPress={() => setArchiveVisible(true)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="archive-outline" size={18} color={isDarkTheme ? '#8E8E93' : '#6C6C70'} />
+                <Text style={[styles.archiveFooterText, { color: isDarkTheme ? '#8E8E93' : '#6C6C70' }]}>
+                  Архив
+                </Text>
+              </TouchableOpacity>
+            }
           />
         )}
 
@@ -1039,6 +1389,34 @@ export default function App({ onExpensesChange, openMenuRef }: AppProps = {}): R
             onPress={() => setShowAddModal(true)}
           />
         </View>
+
+        {/* Undo delete toast */}
+        {pendingDelete && (
+          <Animated.View
+            style={[
+              styles.undoToast,
+              { backgroundColor: isDarkTheme ? '#2C2C2E' : '#FFF', transform: [{ translateY: toastSlide }] },
+            ]}
+          >
+            <Text style={[styles.undoToastText, { color: isDarkTheme ? '#FFF' : '#1C1C1E' }]} numberOfLines={1}>
+              {'Удалено "' + pendingDelete.item.name + '"'}
+            </Text>
+            <View style={styles.undoToastRight}>
+              <Text style={[styles.undoCountdown, { color: isDarkTheme ? '#8E8E93' : '#6C6C70' }]}>
+                {undoCountdown}
+              </Text>
+              <TouchableOpacity style={styles.undoBtn} onPress={handleUndoDelete} activeOpacity={0.75}>
+                <Text style={styles.undoBtnText}>Отменить</Text>
+              </TouchableOpacity>
+            </View>
+            <Animated.View
+              style={[
+                styles.undoProgress,
+                { width: toastProgress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) },
+              ]}
+            />
+          </Animated.View>
+        )}
       </Animated.View>
 
       <AddExpenseModal
@@ -1054,6 +1432,22 @@ export default function App({ onExpensesChange, openMenuRef }: AppProps = {}): R
         isDarkTheme={isDarkTheme}
         user={user}
         onClose={() => setMenuVisible(false)}
+      />
+
+      <ArchiveModal
+        visible={archiveVisible}
+        onClose={() => setArchiveVisible(false)}
+        expenses={expenses}
+        isDarkTheme={isDarkTheme}
+      />
+
+      <OcrOverlay
+        visible={ocrVisible}
+        imageUri={ocrImageUri}
+        userId={user?.mongoId}
+        isDarkTheme={isDarkTheme}
+        onConfirm={handleOcrConfirm}
+        onCancel={() => setOcrVisible(false)}
       />
     </SafeAreaView>
   );
@@ -1075,7 +1469,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
   },
   title: { fontSize: 20, fontWeight: 'bold' },
-  list: { flex: 1, padding: 16 },
+  list: { flex: 1 },
   emptyState: {
     flex: 1,
     alignItems: 'center',
@@ -1084,56 +1478,47 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
   },
   emptyText: { fontSize: 16, textAlign: 'center' },
-  expenseItem: {
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    marginBottom: 8,
-    elevation: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-  },
-  expenseHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-  },
   expenseName: { fontSize: 16, fontWeight: '500' },
   expenseDetails: { fontSize: 14, marginTop: 2 },
-  toggleButton: { padding: 8 },
-  expandedActions: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingVertical: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
+  // Swipe-to-reveal item styles
+  swipeContainer: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 12,
+    overflow: 'hidden',
   },
-  actionBtnOutline: {
+  swipeActions: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: REVEAL_WIDTH,
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 8,
-    borderWidth: 1,
+    gap: 6,
   },
-  actionBtnOutlineText: { fontSize: 14, fontWeight: '600' },
-  actionBtnFill: {
+  swipeActionBtn: {
     flex: 1,
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
-    paddingVertical: 9,
-    borderRadius: 8,
+    gap: 4,
+    borderRadius: 12,
   },
-  actionBtnFillText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
+  swipeActionLabel: { color: '#FFF', fontSize: 11, fontWeight: '600' },
+  swipeCard: {
+    borderRadius: 12,
+  },
+  swipeCardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
   inlineEditContainer: {
-    paddingBottom: 4,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: 'rgba(128,128,128,0.2)',
-    paddingTop: 8,
   },
   inlineLabel: { fontSize: 12, fontWeight: '500', marginTop: 8, marginBottom: 4 },
   input: { borderRadius: 8, padding: 10, fontSize: 16 },
@@ -1192,4 +1577,91 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   addButtonText: { color: '#FFF', fontWeight: '600', fontSize: 16 },
+
+  // FREE badge in header
+  freeBadge: {
+    backgroundColor: '#4CAF50',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  freeBadgeText: { color: '#FFF', fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
+
+  // Archive footer button
+  archiveFooterBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginHorizontal: 40,
+    marginTop: 16,
+    marginBottom: 24,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  archiveFooterText: { fontSize: 15, fontWeight: '500' },
+
+  // Day group header
+  dayHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 6,
+  },
+  dayHeaderLabel: { fontSize: 13, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
+  dayHeaderTotal: { fontSize: 13, fontWeight: '500' },
+
+  // Undo delete toast
+  undoToast: {
+    position: 'absolute',
+    bottom: 84,
+    left: 16,
+    right: 16,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    overflow: 'hidden',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+  },
+  undoToastText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  undoToastRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginLeft: 8,
+  },
+  undoCountdown: {
+    fontSize: 14,
+    fontWeight: '700',
+    minWidth: 16,
+    textAlign: 'center',
+  },
+  undoBtn: {
+    backgroundColor: '#636366',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 8,
+  },
+  undoBtnText: { color: '#FFF', fontSize: 13, fontWeight: '600' },
+  undoProgress: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    height: 3,
+    backgroundColor: PRIMARY_COLOR,
+  },
 });

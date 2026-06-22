@@ -230,7 +230,10 @@ export default function TopScreen(): React.JSX.Element {
       <StatusBar barStyle={isDarkTheme ? 'light-content' : 'dark-content'} />
 
       <View style={[tS.header, { backgroundColor: isDarkTheme ? '#222' : '#FFF' }]}>
-        <Text style={[tS.title, { color: textColor }]}>Топ экономии</Text>
+        <Text style={[tS.title, { color: textColor }]}>Spento</Text>
+        <View style={tS.freeBadge}>
+          <Text style={tS.freeBadgeText}>FREE</Text>
+        </View>
       </View>
 
       <ScrollView style={tS.scroll} contentContainerStyle={tS.content} showsVerticalScrollIndicator={false}>
@@ -258,9 +261,12 @@ export default function TopScreen(): React.JSX.Element {
 
 const tS = StyleSheet.create({
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     paddingHorizontal: 16,
     minHeight: 60,
-    justifyContent: 'center',
     elevation: 2,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
@@ -268,6 +274,8 @@ const tS = StyleSheet.create({
     shadowRadius: 2,
   },
   title: { fontSize: 20, fontWeight: 'bold' },
+  freeBadge: { backgroundColor: '#4CAF50', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
+  freeBadgeText: { color: '#FFF', fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
   scroll: { flex: 1 },
   content: { padding: 16, paddingBottom: 40 },
   periodCard: {
