@@ -246,6 +246,19 @@ export const OcrOverlay: React.FC<OcrOverlayProps> = ({
 
   const receiptIdRef = useRef<string | undefined>(undefined);
 
+  // Reset receiptId whenever a new scan starts
+  useEffect(() => {
+    if (visible && imageUri) receiptIdRef.current = undefined;
+  }, [visible, imageUri]);
+
+  const deleteReceiptFromDb = useCallback(() => {
+    const id = receiptIdRef.current;
+    if (!id) return;
+    receiptIdRef.current = undefined;
+    // Fire-and-forget — user cancelled, clean up orphan record
+    fetch(`${API_URL}/api/receipts/${id}`, { method: 'DELETE' }).catch(() => {});
+  }, []);
+
   const handleConfirm = () => {
     const expenses: Omit<Expense, 'id'>[] = items.map(it => ({
       productId: `p_${it.name.toLowerCase().replace(/\s+/g, '_')}_${generateId()}`,
@@ -255,8 +268,17 @@ export const OcrOverlay: React.FC<OcrOverlayProps> = ({
       category: it.category,
       date: new Date().toISOString(),
     }));
-    onConfirm(expenses, receiptIdRef.current);
+    const rid = receiptIdRef.current;
+    receiptIdRef.current = undefined; // mark as consumed → no deletion on cancel
+    onConfirm(expenses, rid);
   };
+
+  // If user closes without confirming AND items were already saved to DB → delete
+  const handleCancel = useCallback(() => {
+    deleteReceiptFromDb();
+    cancelledRef.current = true;
+    onCancel();
+  }, [deleteReceiptFromDb, onCancel]);
 
   const cardBg  = isDarkTheme ? '#2C2C2E' : '#FFF';
   const sheetBg = isDarkTheme ? '#1C1C1E' : '#F2F2F7';
@@ -269,7 +291,7 @@ export const OcrOverlay: React.FC<OcrOverlayProps> = ({
   const isLoading = phase === 'uploading' || phase === 'processing';
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onCancel}>
+    <Modal visible={visible} transparent animationType="none" onRequestClose={handleCancel}>
       <BlurView
         intensity={55}
         tint={isDarkTheme ? 'dark' : 'light'}
@@ -279,7 +301,7 @@ export const OcrOverlay: React.FC<OcrOverlayProps> = ({
       <TouchableOpacity
         style={{ flex: 1 }}
         activeOpacity={1}
-        onPress={isLoading ? undefined : onCancel}
+        onPress={isLoading ? undefined : handleCancel}
       />
       <Animated.View
         style={[oS.sheet, { backgroundColor: sheetBg, transform: [{ translateY }], paddingBottom: insets.bottom + 8 }]}
@@ -290,7 +312,7 @@ export const OcrOverlay: React.FC<OcrOverlayProps> = ({
         {/* Header */}
         <View style={[oS.header, { borderBottomColor: isDarkTheme ? '#3A3A3C' : '#E0E0E0' }]}>
           <TouchableOpacity
-            onPress={onCancel}
+            onPress={handleCancel}
             style={oS.closeBtn}
             disabled={isLoading}
           >
@@ -365,7 +387,7 @@ export const OcrOverlay: React.FC<OcrOverlayProps> = ({
           <View style={[oS.footer, { borderTopColor: isDarkTheme ? '#3A3A3C' : '#E0E0E0' }]}>
             <TouchableOpacity
               style={[oS.confirmBtn, { backgroundColor: '#636366', flex: 1 }]}
-              onPress={onCancel}
+              onPress={handleCancel}
             >
               <Text style={oS.confirmText}>Закрыть</Text>
             </TouchableOpacity>
@@ -377,7 +399,7 @@ export const OcrOverlay: React.FC<OcrOverlayProps> = ({
             <Text style={[oS.errorText, { color: '#FF3B30', flex: 1 }]} numberOfLines={2}>{errorMsg}</Text>
             <TouchableOpacity
               style={[oS.confirmBtn, { backgroundColor: '#636366' }]}
-              onPress={onCancel}
+              onPress={handleCancel}
             >
               <Text style={oS.confirmText}>Закрыть</Text>
             </TouchableOpacity>

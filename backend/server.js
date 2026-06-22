@@ -199,23 +199,53 @@ app.post('/api/ocr', upload.single('image'), async (req, res) => {
   }
 });
 
+// ─── DELETE /api/receipts/:id — called when user cancels without adding ────────
+
+app.delete('/api/receipts/:id', async (req, res) => {
+  try {
+    await Receipt.findByIdAndDelete(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 // ─── Receipt text parser ──────────────────────────────────────────────────────
 
 function parseReceiptText(raw) {
   const lines = raw
     .split('\n')
     .map(l => l.trim().replace(/\s+/g, ' '))
-    .filter(l => l.length > 2 && l.length < 100);
+    .filter(l => l.length > 2 && l.length < 120);
 
-  const SKIP_RE = /^(suma|razem|total|итого|сумма|gotówka|reszta|kasa|kasjer|data:|godzina|zmiana|nip:|paragon|fiskal|wydruk|pokwit|cashier|change|subtotal|rabat|discount|www\.|tel\.|ul\.|al\.)/i;
-  const VAT_RE  = /^(ptu\s+[a-d]|vat\s+\d|нал|ндс)/i;
-  const PRICE_TAIL  = /(\d{1,4}[,.]?\d{2})\s*[A-D]?\s*$/;
-  const LEADING_QTY = /^(\d+(?:[,.]\d+)?)\s*[xх×*]\s*/i;
+  // Lines to skip entirely
+  const SKIP_RE = /^(suma|razem|total|итого|сумма|gotówka|reszta|kasa|kasjer|data:|godzina|zmiana|nip\b|paragon|fiskal|wydruk|pokwit|cashier|change|subtotal|rabat|discount|www\.|tel\.|ul\.|al\.|non-fiscal|store\s|jeronimo|spółka|s\.a\.|sp\.\s)/i;
+  const VAT_LINE = /^(ptu\s+[a-d]|vat\s+\d|нал|ндс)/i;
 
   const items = [];
 
   for (const line of lines) {
-    if (SKIP_RE.test(line) || VAT_RE.test(line)) continue;
+    if (SKIP_RE.test(line) || VAT_LINE.test(line)) continue;
+
+    // ── Format A: Polish store style (Biedronka, Lidl, Żabka, etc.) ──────────
+    // Pattern: "ProductName  C  1 x  3,99  3,99C"
+    //           ^name^      vat qty   unit  total+vat
+    const fmtA = line.match(
+      /^(.+?)\s+[A-D]\s+(\d{1,3})\s*x\s*(\d{1,4}[,.]\d{2})\s+\d{1,4}[,.]\d{2}[A-D]?\s*$/i
+    );
+    if (fmtA) {
+      const name  = fmtA[1].trim();
+      const qty   = parseInt(fmtA[2], 10) || 1;
+      const price = parseFloat(fmtA[3].replace(',', '.'));
+      if (isValidItem(name, price)) {
+        items.push({ name: fmtName(name), price, quantity: qty, category: guessCategory(name) });
+      }
+      continue;
+    }
+
+    // ── Format B: simple "Name  PRICE" (Russian receipts, other stores) ──────
+    const PRICE_TAIL  = /(\d{1,4}[,.]\d{2})\s*[A-D]?\s*$/;
+    const LEADING_QTY = /^(\d+(?:[,.]\d+)?)\s*[xх×*]\s*/i;
 
     const priceM = PRICE_TAIL.exec(line);
     if (!priceM) continue;
@@ -226,6 +256,11 @@ function parseReceiptText(raw) {
     let namePart = line.slice(0, priceM.index).trim();
     if (!namePart || namePart.length < 2) continue;
 
+    // Strip inline qty+price suffix: "2 x 3,99" or "1 x 5,49"
+    namePart = namePart.replace(/\s+\d+\s*x\s*[\d,.]+\s*$/, '').trim();
+    // Strip lone trailing VAT letter
+    namePart = namePart.replace(/\s+[A-D]$/, '').trim();
+
     const qtyM = LEADING_QTY.exec(namePart);
     let qty = 1;
     if (qtyM) {
@@ -233,22 +268,24 @@ function parseReceiptText(raw) {
       namePart = namePart.slice(qtyM[0].length).trim();
     }
 
-    namePart = namePart
-      .replace(/\s+\d+[,.]\d{3}\s*(kg|g|l|ml|szt|шт|pcs)$/i, '')
-      .replace(/\s+[A-D]$/, '')
-      .trim();
-
-    if (!namePart || namePart.length < 2) continue;
-    if (/^\d+([,.]?\d+)?$/.test(namePart)) continue;
-    if (/^\*+$/.test(namePart)) continue;
-
-    const name = namePart.charAt(0).toUpperCase() + namePart.slice(1);
+    if (!isValidItem(namePart, price)) continue;
     const unitPrice = qty > 1 ? parseFloat((price / qty).toFixed(2)) : price;
-
-    items.push({ name, price: unitPrice, quantity: qty, category: guessCategory(namePart) });
+    items.push({ name: fmtName(namePart), price: unitPrice, quantity: qty, category: guessCategory(namePart) });
   }
 
   return items;
+}
+
+function isValidItem(name, price) {
+  if (!name || name.length < 2) return false;
+  if (price <= 0 || price > 1500) return false;
+  if (/^\d+([,.]?\d+)?$/.test(name)) return false; // pure number
+  if (/^\*+$/.test(name)) return false;             // asterisks only
+  return true;
+}
+
+function fmtName(raw) {
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
 function guessCategory(name) {
